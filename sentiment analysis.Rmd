@@ -1,0 +1,370 @@
+---
+title: "sentiment analysis"
+author: "chijioke obiakor"
+date: "2025-02-19"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load necessary libraries
+```{r install &Load , message = FALSE}
+libraries <- c("tm", "tidytext", "ggplot2", "wordcloud", "syuzhet", "dplyr", "tibble", "textstem", "textdata", "tidyr", "Matrix", "topicmodels", "stringr", "reshape2", "LDAvis", "jsonlite","spacyr","NLP","proxy","igraph","textTinyR")
+
+#install.packages(libraries) # Comment out after first execution
+
+for (lib in libraries) { 
+  library(lib, character.only=TRUE) #Library takes function names without quotes, character only must be used in a loop of this kind.
+}
+```
+# Load and inspect the dataset
+```{r Load Dataset}
+filepath <- "C:\\Users\\Dell\\Downloads\\MS4S09_CW_Book_Reviews.csv" # Define file path. Windows requires \ to be replaced by \\. / Works on Mac (apparently).
+review_df<- as_tibble(read.csv(filepath, stringsAsFactors = FALSE)) # Since we have text data we do not want this read as a factor
+
+# Inspect summary and first few rows of data
+print(summary(review_df))
+print(head(review_df))
+
+```
+# Data selection and sampling
+```{r Select Data}
+review_df<- review_df[,c(1,3,4,6,7)] # Select  needed columns
+
+review_df<- na.omit(review_df) # Removes all rows containing null values
+
+```
+
+```{r check number of unique books}
+unique_values <- unique(review_df$Title)
+num_unique_values <- length(unique_values)
+
+# Print the number of unique values
+print(num_unique_values)
+
+```
+
+```{r check no of reviews per book }
+book_reviews_count <- table(review_df$Title)
+
+
+
+# Step 2: Filter restaurants with over 20 reviews
+book_over_50_reviews<- names(book_reviews_count)[book_reviews_count > 50]
+print(book_over_50_reviews)
+
+review_df<- review_df%>%filter(Title %in% book_over_50_reviews)
+```
+```{r sampling}
+set.seed(124)
+sample_index<- sample(length(unique(review_df$Title)), 10)
+sampled_title<- unique(review_df$Title)[sample_index]
+
+review_df <- review_df%>%filter(Title %in% sampled_title)
+
+print(summary(review_df))
+head(review_df)
+```
+# Tokenization(word)
+```{r}
+word_tokenized_data <- review_df %>% 
+  unnest_tokens(output = word, input = Review_text, token = "words", to_lower = TRUE)
+```
+# plot of top 12 words
+```{r}
+word_count<- word_tokenized_data%>% count(word,sort = TRUE)
+
+ggplot(word_count[1:12, ], aes(x = reorder(word, n), y = n)) + # Plots first 10 rows of word counts, with word (ordered by n) on the x axis and n on the y axis
+  geom_col(fill = "pink") + # Sets colours of bars to blue
+  labs(x = "Words", y = "Frequency") + # Defines x and y labels
+  coord_flip() + # Flips coordinates so words go on the y axis (for readability)
+  theme_minimal() # Sets theme of visualisation
+```
+# word cloud
+
+```{r word cloud}
+set.seed(1)
+wordcloud(words=word_count$word, freq = word_count$n, min.freq = 100, random.order = FALSE, random.color =FALSE, colors = sample(colors(), size = 10))
+```
+
+# cleaning the data
+```{r data cleaning}
+clean_tokens <- word_tokenized_data %>%
+  anti_join(stop_words, by = "word") # Removes stop words
+  
+clean_tokens$word <- gsub("[^a-zA-Z ]", "", clean_tokens$word) %>% # Remove special characters and numbers
+  na_if("") %>% # Replaces empty strings with NA
+  lemmatize_words() # Lemmatizes text
+
+clean_tokens <- na.omit(clean_tokens) # Removes null values
+```
+
+```{r clean word count}
+word_count<- clean_tokens%>% count(word,sort = TRUE)
+
+ggplot(word_count[1:12, ], aes(x = reorder(word, n), y = n)) + # Plots first 10 rows of word counts, with word (ordered by n) on the x axis and n on the y axis
+  geom_col(fill = "purple") + # Sets colours of bars to blue
+  labs(x = "Words", y = "Frequency") + # Defines x and y labels
+  coord_flip() + # Flips coordinates so words go on the y axis (for readability)
+  theme_minimal() # Sets theme of visualisation
+```
+
+# tokeniztion and plots (bigram)
+```{r bigram}
+bigram_tokenized_data <- review_df %>%
+  unnest_tokens(output = bigram, input = Review_text, token = "ngrams", n=2, to_lower = TRUE)
+
+bigram_counts <- bigram_tokenized_data %>%
+  count(bigram, sort = TRUE)
+
+ggplot(bigram_counts[1:10, ], aes(x = reorder(bigram, n), y = n)) +
+  geom_col(fill = "blue") +
+  labs(x = "Bigrams", y = "Frequency") +
+  coord_flip() +
+  theme_minimal()
+
+```
+```{r cleaning the bigram}
+untokenized_data <- clean_tokens %>%
+  group_by(Reviewer_id) %>%
+  summarize(clean_review = paste(word, collapse = " ")) %>%
+  inner_join(review_df, by="Reviewer_id")
+
+clean_bigrams <- untokenized_data %>%
+  unnest_tokens(output = bigram, input = clean_review, token = "ngrams", n=2, to_lower = TRUE) # Tokenize word column to bigrams
+
+bigram_counts <- clean_bigrams %>%
+  count(bigram, sort = TRUE)
+
+top_bigrams <- top_n(bigram_counts,10,n)$bigram
+
+filtered_bigram_counts <- filter(bigram_counts, bigram %in% top_bigrams)
+filtered_bigram_counts$bigram <- factor(filtered_bigram_counts$bigram, levels = top_bigrams[length(top_bigrams):1])
+
+ggplot(filtered_bigram_counts, aes(x = reorder(bigram, n), y = n)) +
+  geom_col(fill = "blue") +
+  labs(x = "Bigrams", y = "Frequency") +
+  coord_flip() +
+  theme_minimal()
+```
+```{r bigram grouping}
+top_bigrams <- top_n(bigram_counts,5,n)$bigram
+
+grouped_count <- group_by(clean_bigrams, Title) %>%
+  count(bigram) %>%
+  filter(bigram %in% top_bigrams)
+
+grouped_count$bigram <- factor(grouped_count$bigram, levels = top_bigrams[length(top_bigrams):1])
+
+
+
+# Rotate x-axis labels
+ggplot(data = grouped_count, aes(x = reorder(bigram, n), y = n, fill = Title)) +
+  geom_col(position = "dodge") +
+  labs(x = "Bigrams", y = "Frequency", fill = "Book Title") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) +  # Wrap text
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate labels
+  theme_minimal()
+```
+<H2>SUMMARY</H2>
+1)Install and Load Libraries:
+Installs and loads necessary R packages for text analysis, such as tm, tidytext, ggplot2, wordcloud, etc.
+Load Dataset:
+
+2).Reads a CSV file containing book review data into a tibble.
+Summarizes the dataset and displays the first few rows.
+3) Select Data:
+Selects specific columns from the dataset (review_df) and removes rows with missing values.
+4) Check Number of Unique Books:
+Calculates the number of unique books in the dataset.
+5) Check Number of Reviews per Book:
+Counts the number of reviews for each book and filters out books with more than 50 reviews.
+6) Sampling:
+Randomly selects a subset of books and filters the dataset to include only reviews for those books.
+
+7) Word Tokenization:
+Tokenizes the review text into individual words.
+8) Word Count Visualization:
+Calculates word frequencies and visualizes the top words using a bar plot.
+9) Word Cloud:
+Generates a word cloud visualization based on word frequencies.
+10) Data Cleaning:
+Removes stop words and special characters from the tokenized words, and lemmatizes the text.
+11) Clean Word Count Visualization:
+Calculates word frequencies after data cleaning and visualizes the top words using a bar plot.
+12) Bigram Tokenization:
+Tokenizes the review text into bigrams (pairs of consecutive words).
+13) Bigram Frequency Visualization:
+Calculates bigram frequencies and visualizes the top bigrams using a bar plot.
+14) Cleaning the Bigram:
+Cleans the bigrams data, filters out top bigrams, and visualizes their frequencies using a bar plot.
+
+Overall, this code performs exploratory text analysis on book review data, including data preprocessing, tokenization, and visualization of word and bigram frequencies.
+
+# question 2
+```{r}
+
+
+```
+
+```{r SENTIMENT ANALYSIS}
+# Perform sentiment analysis for bing and afinn
+sentiment_data_bing <- clean_tokens %>%
+  inner_join(get_sentiments("bing"), by = "word") %>%
+  group_by(Reviewer_id) %>%
+  summarise(bing_sentiment = sum(sentiment == "positive") - sum(sentiment == "negative"))
+
+sentiment_data_afinn <- clean_tokens %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(Reviewer_id) %>%
+  summarise(afinn_sentiment = sum(value))
+
+# Join sentiment scores with review_df
+review_df_with_sents <- review_df %>%
+  inner_join(sentiment_data_bing, by = "Reviewer_id") %>%
+  inner_join(sentiment_data_afinn, by = "Reviewer_id")
+
+# Plot scatter plot
+ggplot(review_df_with_sents, aes(x = afinn_sentiment, y = bing_sentiment)) +
+  geom_point() +
+  labs(title = "Scatter plot of AFINN sentiment scores vs Bing sentiment scores",
+       x = "AFINN sentiment score",
+       y = "Bing sentiment score")
+
+
+correlation <- cor(review_df_with_sents$bing_sentiment, review_df_with_sents$Rating)
+ggplot(review_df_with_sents, aes(x = bing_sentiment, y = Rating)) +
+  geom_point() +
+  labs(title = paste("Scatter plot of bing sentiment scores vs Rating\nCorrelation:", round(correlation, 2)),
+       x = "bing sentiment score",
+       y = "Rating")
+```
+```{r box plots of sentiment scores with rating}
+review_df_with_sents$Rating <- factor(review_df_with_sents$Rating) # Convert Rating to factor
+
+ggplot(review_df_with_sents, aes(x = Rating, y = bing_sentiment)) +
+  geom_boxplot() +
+  labs(title = "Box Plot of Bing Sentiment Score vs. Rating",
+       x = "Rating",
+       y = "Sentiment Score")
+
+ggplot(review_df_with_sents, aes(x = Rating, y = afinn_sentiment)) +
+  geom_boxplot() +
+  labs(title = "Box Plot of afinn Sentiment Score vs. Rating",
+       x = "Rating",
+       y = "Sentiment Score")
+```
+
+```{r best and worst reviews}
+worst_review_bing = review_df_with_sents[order(review_df_with_sents$bing_sentiment)[1], "Review_text"] 
+
+cat("Worst Review (Bing):\n", worst_review_bing$Review_text, "\n")
+
+best_review_bing = review_df_with_sents[order(review_df_with_sents$bing_sentiment, decreasing = TRUE)[1], "Review_text"] 
+
+
+cat("Best Review (Bing):\n", best_review_bing$Review_text, "\n\n")
+
+worst_review_afinn = review_df_with_sents[order(review_df_with_sents$afinn_sentiment)[1], "Review_text"] 
+
+cat("Worst Review (AFINN):\n", worst_review_afinn$Review_text, "\n")
+
+best_review_afinn = review_df_with_sents[order(review_df_with_sents$afinn_sentiment, decreasing = TRUE)[1], "Review_text"] 
+
+
+cat("Best Review (AFINN):\n", best_review_afinn$Review_text, "\n\n")
+
+```
+
+```{r}
+ggplot(review_df_with_sents, aes(x=bing_sentiment))+
+geom_histogram(binwidth=1)
+
+ggplot(review_df_with_sents, aes(x=afinn_sentiment))+
+geom_histogram(binwidth=1)
+```
+
+```{r}
+book_sentiment <- review_df_with_sents %>% 
+  group_by(Title) %>% 
+  summarise(average_bing_sentiment = mean(bing_sentiment))
+
+# Add a column indicating sentiment category (positive, negative, or neutral)
+book_sentiment <- book_sentiment %>%
+  mutate(sentiment_category = ifelse(average_bing_sentiment > 0, "Positive", 
+                                     ifelse(average_bing_sentiment < 0, "Negative", "Neutral")))
+
+# Plot the average sentiment score by title, color-coded by sentiment category
+ggplot(book_sentiment, aes(x = reorder(Title, average_bing_sentiment), y = average_bing_sentiment, fill = sentiment_category)) +
+  geom_col(position = "dodge") +  
+  coord_flip() +
+  scale_fill_manual(values = c("Positive" = "green", "Negative" = "red", "Neutral" = "grey")) +  # Specify custom colors for each sentiment category
+  labs(x = "Title", y = "Average Bing Sentiment Score") +
+  theme_minimal()
+
+```
+```{r lexicon}
+emotion_data <- clean_tokens %>%
+  inner_join(get_sentiments("nrc"), by = "word")
+
+# Calculate Sentiment scores for each review
+emotion_count <- emotion_data %>%
+  group_by(Reviewer_id) %>%
+  count(sentiment)
+
+# Pivots data so that there is a column associated with each emotion
+wide_emotion_data <- emotion_count %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = list(n = 0))
+
+# Merge with df
+review_df_with_sents <- review_df_with_sents %>%
+  inner_join(wide_emotion_data, by = "Reviewer_id")
+
+# Long format for ggplot
+long_df <- review_df_with_sents %>%
+  pivot_longer(cols = c("anger", "anticipation", "disgust", "fear", "joy", "sadness", "surprise", "trust"),
+               names_to = "Emotion",
+               values_to = "Intensity")
+
+# Calculate average intensity of each emotion by restaurant
+emotion_scores <- long_df %>%
+  group_by(Title, Emotion) %>%
+  summarize(avg_intensity = mean(Intensity))
+
+# Plot
+ggplot(emotion_scores, aes(x = Title, y = Emotion, fill = avg_intensity)) +
+  geom_tile() +  
+  scale_fill_gradient2(low = "blue", high = "red") +
+  labs(x = "Title", y = "Emotion", fill = "Intensity") +
+  theme(axis.text.x = element_text(angle = 30, hjust=1))
+```
+
+<h2>conclusion for sentiment analysis</h2>
+
+Based on the observations from the scatter plot between Bing and AFINN sentiment scores, as well as the correlation analysis between sentiment scores and ratings, along with the observation regarding the choice of words leading to opposite sentiment scores, the following conclusions can be drawn:
+
+1) --Strong Positive Correlation between Bing and AFINN Sentiment Scores:
+
+The scatter plot between Bing and AFINN sentiment scores indicates a strong positive correlation. This suggests that the two sentiment lexicons tend to assign similar sentiment scores to the same reviews. It implies that the sentiment analysis results obtained from these lexicons are consistent with each other.
+
+
+2)--Weak Positive Correlation between Sentiment Scores and Ratings:
+
+The scatter plot between sentiment scores and ratings shows a weak positive correlation. This indicates that there is a tendency for reviews with higher sentiment scores (either from Bing or AFINN) to have slightly higher ratings. However, the correlation is not very strong, suggesting that sentiment scores alone may not be the sole determinant of ratings.
+
+
+3)--Observation of Misclassification due to Choice of Words:
+
+Upon inspecting the DataFrame, it can be observed that some positive reviews were awarded negative sentiment scores, possibly due to the choice of words. This observation suggests that sentiment analysis algorithms may misclassify the sentiment of reviews when certain words are used, leading to discrepancies between the actual sentiment expressed in the review and the sentiment score assigned by the lexicons.
+
+
+4)--Implications for Sentiment Analysis and Review Interpretation:
+
+The observed misclassification highlights the limitations of sentiment analysis algorithms, particularly when relying solely on the presence of specific words to determine sentiment. It underscores the importance of context and semantics in accurately interpreting the sentiment of text data.
+When interpreting reviews and sentiment analysis results, it's crucial to consider the nuances of language and the potential impact of word choice on sentiment classification. This suggests the need for more sophisticated sentiment analysis approaches that take into account context, semantics, and linguistic nuances to improve accuracy.
+Overall, while Bing and AFINN sentiment scores show strong agreement and a weak positive correlation with ratings, the observation of misclassification underscores the need for caution when interpreting sentiment analysis results and emphasizes the importance of context and linguistic nuances in accurately capturing sentiment from text data
+
